@@ -1,0 +1,1498 @@
+library(GEOquery)
+library(Biobase)
+library(BiocGenerics)
+library(parallel)
+library(cluster)
+library(factoextra)
+library(FactoMineR)
+library(reshape2)
+library(ggplot2)
+library(reshape)
+library(RColorBrewer)
+library(pheatmap)
+library(ConsensusClusterPlus)
+library(dplyr)
+library(reshape)
+library(survival)
+library(survminer)
+library(parallel)
+library(ggplot2)
+library(ggpubr)
+library(magrittr)
+library(umap)
+library(Rtsne)
+library(Seurat)
+library(dplyr)
+library(cluster)
+library(factoextra)
+library(FactoMineR)
+library(factoextra)
+library(reshape2)
+library(ggplot2)
+library(GSVA)
+library(GSEABase)
+library(msigdbr)
+library(clusterProfiler)
+options(connectionObserver = NULL)
+library(org.Hs.eg.db)
+library(enrichplot)
+library(limma)
+library(edgeR)
+library(RColorBrewer)
+library(pheatmap)
+library(AnnotationDbi)
+library(reshape)
+library(reshape2)
+library(clusterProfiler)
+library(DESeq2)
+library(maftools)
+library(TCGAmutations)
+library(stats)
+library(plyr)
+options(digits=22)
+library(tidyverse)
+library(sva)
+Sys.setenv("VROOM_CONNECTION_SIZE"=99999999)
+
+library(glmnet)
+library(pROC)
+
+
+###输入高增殖亚群signature
+setwd("D:/data/data3/ASPM/Single LUAD")
+ssi4<-read.table("LUAD Highpro.csv",
+               sep=",",header=TRUE,stringsAsFactors=FALSE)
+
+ssi6_list= split(ssi4$ENTREZID,ssi4$Celltype)
+
+options(digits=22)
+
+##输入肺腺癌数据集
+setwd("D:/data/data16/singlegene")
+LUAD1<-list.files(pattern="\\RNA matrix.csv")
+LUAD2<-as.data.frame(LUAD1)
+LUAD3<-tidyr::separate(LUAD2,LUAD1,into=c("Dataset")," ")
+for(i in seq_along(LUAD3$Dataset))
+  assign(LUAD3$Dataset[i], read.table(LUAD1[i], sep = ",", header = TRUE))
+
+LUAD4<-list(GSE13213,GSE26939,GSE30219,GSE31210,GSE41271,GSE42127,
+            GSE50081,GSE63459,GSE68465,GSE68571,GSE72094,TCGALUAD)
+for(i in seq_along(LUAD4)){rownames(LUAD4[[i]])<-(LUAD4[[i]])[,1]}
+
+##对每一个数据集进行Z转化
+LUAD5<-lapply(LUAD4,function(x)as.data.frame(t(scale(t(x[,-1])))))
+
+for(i in seq_along(LUAD5)){ LUAD5[[i]]$GeneID <- rownames(LUAD5[[i]])}
+for(i in seq_along(LUAD5)){ LUAD5[[i]] <- (LUAD5[[i]])[,c("GeneID",colnames(LUAD5[[i]])[1:(length(colnames(LUAD5[[i]]))-1)])]}
+
+
+LUAD5a<-LUAD5
+for(i in seq_along(LUAD5)){
+    rownames(LUAD5a[[i]])<-LUAD5[[i]]$GeneID
+}
+names(LUAD5a)<-LUAD3$Dataset
+
+
+
+NS1<-read.table("D:/data/data16/NSCLC clinical.csv",sep=",",header=TRUE,stringsAsFactors=FALSE)
+
+lR1<-NS1
+lR1a<-subset(lR1,lR1$Histology=="AD",select=c(1:ncol(lR1)))
+lR2<-split(lR1a,lR1a$Dataset)
+
+lR1ap<-subset(lR1,lR1$Histology=="AD" &
+                lR1$Dataset %in% c("GSE13213","GSE30219",
+                                   "GSE31210","GSE41271",
+                                   "GSE42127",
+                                   "GSE50081","GSE68465",
+                                   "GSE72094","TCGA-LUAD"),select=c(1:ncol(lR1)))
+table(lR1ap$Dataset,lR1ap$pStage)
+
+set.seed(765429)
+
+##由于后续筛选中GSE68465缺少基因，故训练集采用GSE68465
+xu1<-LUAD5a[["GSE68465"]]
+
+
+xu2<-subset(xu1,xu1$GeneID %in% ssi4$ENTREZID,select=c(1:ncol(xu1)))
+LA3<-as.data.frame(t(xu2[,-1]))
+
+LA3$Patients<-rownames(LA3)
+LA4<-merge(lR1ap[,c("Patients","OS.time","OS.status")],LA3,by=c("Patients"))%>%na.omit()
+LA4<-LA4[complete.cases(LA4$OS.status),]
+LA4<-subset(LA4,LA4$OS.time>0,select=c(1:ncol(LA4))) ##生存时间不能为0
+
+
+##LASSO
+lasy<-cbind(time=LA4$OS.time,status=LA4$OS.status)
+lasx<-as.matrix(LA4[,-c(1:3)])
+fit1<-glmnet(lasx,lasy,family="cox")
+
+plot1<-plot(fit1,font.lab=2,font.axis=2,
+            cex.lab=1.5,cex.axis=1.5)
+
+fit2<-cv.glmnet(lasx,lasy,family="cox")
+plot2<-plot(fit2,font.lab=2,font.axis=2,
+            cex.lab=1.5,cex.axis=1.5)
+fit2$lambda.min
+fit2$lambda.1se
+
+
+
+e1<-coef(fit2,s=fit2$lambda.min)
+e1<-coef(fit2,s=fit2$lambda.1se)
+
+
+e2<-e1[which(e1!= 0)]
+
+e3<-round(e2,4)
+e3
+e4<-row.names(e1)[which(e1!= 0)]
+e4
+e5<-matrix(e3,length(e3),1)
+rownames(e5)<-e4
+colnames(e5)<-c("coef")
+e5
+rownames(e5)
+ssi3 <-bitr(rownames(e5), fromType = "ENTREZID",
+            toType = c("ENTREZID", "SYMBOL"),
+            OrgDb = org.Hs.eg.db)
+core1<-ssi3$ENTREZID
+###
+LUAD5b<-LUAD5a[c("GSE13213","GSE30219",
+                 "GSE31210","GSE41271",
+                 "GSE42127",
+                 "GSE50081","GSE68465",
+                 "GSE72094","TCGALUAD")]
+LUAD6<-list()
+for(i in seq_along(LUAD5b)){
+  LUAD6[[i]]<-subset(LUAD5b[[i]],LUAD5b[[i]]$GeneID %in% rownames(e5),select=c(1:ncol(LUAD5b[[i]])))
+  LUAD6[[i]]<-as.data.frame(t(LUAD6[[i]])[-1,])
+}
+
+LUAD6a1<-LUAD6  ##GSE68465无相关基因
+
+
+
+
+
+##通过随机森林筛选
+install.packages("randomForestSRC")
+install.packages("ggvenn")
+library(randomForestSRC)
+library(tidyverse)
+library(ggplot2)
+library(ggvenn)
+library(glmnet)
+library(survival)
+library(xgboost)
+
+library(ggpubr)
+fit <- rfsrc(Surv(OS.time,OS.status)~., data = LA4[,-1],
+             ntree = 1000, nodesize = 14,
+             splitrule = 'logrank',
+             importance = T,
+             proximity = T,
+             forest = T)
+fit
+#绘制OBB图和VIP图
+plot(fit,sorted=TRUE,verbose=TRUE)
+dev.off()
+
+##绘制重要性变量图
+cc6<-as.data.frame(fit$importance)
+cc6$Name<-rownames(cc6)
+colnames(cc6)<-c("importance","Name")
+cc6n<-bitr(cc6$Name, fromType = "ENTREZID",
+            toType = c("ENTREZID", "SYMBOL"),
+            OrgDb = org.Hs.eg.db)
+colnames(cc6)<-c("importance","ENTREZID")
+cc6n1<-merge(cc6n,cc6,by=c("ENTREZID"))
+cc6a<-cc6n1[order(cc6n1$importance),]
+
+write.csv(cc6a, file="rf LUAD xu1.csv",col.names = T,row.names = F)
+
+
+cc6a$SYMBOL<-factor(cc6a$SYMBOL,levels=cc6a$SYMBOL)
+cc7<-ggplot(cc6a[c(66:87),],aes(x=importance,y=SYMBOL,colour="red",size=importance))+geom_point()+
+  xlab("Importance")+ylab("")+
+  theme_bw()+theme(panel.grid =element_blank())+
+  theme(plot.title=element_text(size=12,
+                                face="bold",colour="black"))+
+  theme(axis.title.x=element_text(size=12,
+                                  face="bold",colour="black"))+
+  theme(axis.text.x=element_text(size=10,face="bold",
+                                 colour="black"))+
+  theme(axis.text.y=element_text(size=12,face="bold",
+                                 colour="black"))+
+  theme(legend.position = "none")
+
+cc7
+ggsave("rf impor.pdf", width=4, height=5)
+
+
+
+
+
+##xgboost算法
+x_label<-ifelse(LA4$OS.status==1,LA4$OS.time,-LA4$OS.time)
+x_train<-as.matrix(LA4[,c(4:ncol(LA4))])
+x_val<-xgb.DMatrix(x_train,
+                   label=x_label)
+xgb_param<-list("objective"="survival:cox",
+                "eval_metric"="cox-nloglik")
+xgb.model<-xgb.train(params=xgb_param,
+                     data=x_val,
+                     nrounds=100,
+                     eta=0.1,
+                     watchlist=list(val2=x_val))
+e<-data.frame(xgb.model$evaluation_log)
+ggplot(aes(x=iter,y=val2_cox_nloglik),data=e)+
+  geom_point(color="pink",size=3)+
+  geom_line()+
+  theme_bw()
+
+#筛选VIP值排名前的基因。
+imp<-xgb.importance(feature_names=colnames(x_train),model=xgb.model)
+write.csv(imp, file="xgboost LUAD xu1.csv",col.names = T,row.names = F)
+
+
+impK<-imp[1:20,1:2]
+
+imp1<-bitr(impK$Feature, fromType = "ENTREZID",
+           toType = c("ENTREZID", "SYMBOL"),
+           OrgDb = org.Hs.eg.db)
+
+colnames(impK)<-c("ENTREZID","importance")
+imp1a<-merge(impK,imp1,by=c("ENTREZID"))
+imp1b<-imp1a[order(imp1a$importance),]
+
+imp1b$SYMBOL<-factor(imp1b$SYMBOL,levels=imp1b$SYMBOL)
+imp1c<-ggplot(imp1b,aes(x=importance,y=SYMBOL,size=importance))+geom_point(colour="#BFEFFF")+
+  xlab("Importance")+ylab("")+
+  theme_bw()+theme(panel.grid =element_blank())+
+  theme(plot.title=element_text(size=12,
+                                face="bold",colour="black"))+
+  theme(axis.title.x=element_text(size=12,
+                                  face="bold",colour="black"))+
+  theme(axis.text.x=element_text(size=10,face="bold",
+                                 colour="black"))+
+  theme(axis.text.y=element_text(size=12,face="bold",
+                                 colour="black"))+
+  theme(legend.position = "none")
+
+imp1c
+ggsave("xgb impor.pdf", width=4, height=5)
+
+
+
+
+
+
+
+##交集
+
+core1<-intersect(cc6a[c(66:87),]$ENTREZID,imp[1:20,1:2]$Feature) ##有意义
+imp1h<-bitr(core1, fromType = "ENTREZID",
+           toType = c("ENTREZID", "SYMBOL"),
+           OrgDb = org.Hs.eg.db)
+write.csv(imp1h, file="core1 LUAD xu1.csv",col.names = T,row.names = F)
+imp1h<-read.table("D:/data/data3/ASPM/Single LUAD/core1 LUAD xu1.csv",
+                 sep=",",header=TRUE,stringsAsFactors=FALSE)
+core1<-imp1h$ENTREZID
+##评估上述基因的临床意义
+
+##建立Cox模型
+LA4a<-LA4[,c("OS.time","OS.status",core1)]
+
+
+Ge2<-coxph(Surv(OS.time,OS.status)~., data=LA4a)
+Ge2
+summary(Ge2)
+Ge3<-as.data.frame(Ge2$coefficients)
+Ge3$Gene<-core1
+colnames(Ge3)<-c("coef","Gene")
+
+###输出Ge3
+sh1<-Ge3
+colnames(sh1)<-c("coef","ENTREZID")
+sh2<-merge(imp1h,sh1,by=c("ENTREZID"))
+write.csv(sh2, file="D:/data/data3/ASPM/Single LUAD/core1 LUAD xu1 coef.csv",col.names = T,row.names = F)
+
+LUAD5b<-LUAD5a[c("GSE13213","GSE30219",
+               "GSE31210","GSE41271",
+               "GSE42127",
+               "GSE50081","GSE68465",
+               "GSE72094","TCGALUAD")]
+
+LUAD6<-list()
+for(i in seq_along(LUAD5b)){
+  LUAD6[[i]]<-subset(LUAD5b[[i]],LUAD5b[[i]]$GeneID %in% core1,select=c(1:ncol(LUAD5b[[i]])))
+  LUAD6[[i]]<-as.data.frame(t(LUAD6[[i]])[-1,])
+}
+
+LUAD6a1<-LUAD6
+
+
+LUAD6a<-do.call("rbind",LUAD6a1)
+
+LUAD7<-as.data.frame(t(LUAD6a[,Ge3$Gene]))
+
+LUAD7a<-as.data.frame(apply(LUAD7,2,as.numeric))
+
+las4<-as.data.frame(sapply(LUAD7a,function(x)sum(x*Ge3$coef)))
+
+las4$Patients<-rownames(las4)
+colnames(las4)<-c("LAS","Patients")
+
+write.csv(las4, file="LUAD Highpro gene signature COX.csv",row.names=F)
+las4<-read.table("D:/data/data3/ASPM/Single LUAD/LUAD Highpro gene signature COX.csv",sep=",",header=TRUE,stringsAsFactors=FALSE)
+
+getwd()
+setwd("D:/data/data3/ASPM/Single LUAD")
+##生存分析
+
+NS1a<-las4
+NS1<-read.table("D:/data/data16/NSCLC clinical.csv",sep=",",header=TRUE,stringsAsFactors=FALSE)
+
+lR1<-merge(NS1,NS1a,by=c("Patients"))
+lR1a<-subset(lR1,lR1$Histology=="AD",select=c(1:ncol(lR1)))
+lR2<-split(lR1a,lR1a$Dataset)
+
+lR1ap<-subset(lR1,lR1$Histology=="AD" &
+                lR1$Dataset %in% c("GSE13213","GSE30219",
+                                   "GSE31210","GSE41271",
+                                   "GSE42127",
+                                   "GSE50081","GSE68465",
+                                   "GSE72094","TCGA-LUAD"),select=c(1:ncol(lR1)))
+table(lR1ap$Dataset,lR1ap$pStage)
+
+
+###OS
+colnames(NS1a)
+
+HP1<-list()
+for(i in seq_along(lR2)){
+  HP1[[i]]<-as.data.frame(lR2[[i]])[1,2]}
+
+
+for(i in seq_along(lR2)){
+  HP1[[i]]$HR<-(summary(coxph(Surv(OS.time,OS.status)~LAS,data=lR2[[i]]))$coefficients)[1,2]
+  HP1[[i]]$p<-(summary(coxph(Surv(OS.time,OS.status)~LAS,data=lR2[[i]]))$coefficients)[1,5]
+  HP1[[i]]$CIL<-(summary(coxph(Surv(OS.time,OS.status)~LAS,data=lR2[[i]]))$conf.int)[1,3]
+  HP1[[i]]$CIH<-(summary(coxph(Surv(OS.time,OS.status)~LAS,data=lR2[[i]]))$conf.int)[1,4]
+  HP1[[i]]$HRr<-(summary(coxph(Surv(OS.time,OS.status)~LAS,data=lR2[[i]]))$coefficients)[1,2]
+  HP1[[i]]$pr<-(summary(coxph(Surv(OS.time,OS.status)~LAS,data=lR2[[i]]))$coefficients)[1,5]
+}
+
+HP2<-as.data.frame(do.call("rbind",HP1))
+
+HP2m<-as.data.frame(sapply(HP2,function(x)unlist(x)))##去除列表形式
+
+write.csv(HP2m, file="nsclc 12 Hpro OS COX signature.csv",row.names = F,col.names = T)
+
+##meta图
+HPF<-as.data.frame(sapply(HP2m[,-1],function(x)as.numeric(x)))
+HPF$Dataset<-HP2m$V1
+HPF1<-subset(HPF,HPF$Dataset %in%
+               c("GSE13213","GSE30219","GSE31210","GSE41271","GSE42127",
+                 "GSE50081","GSE68465","GSE72094","TCGA-LUAD"),
+             select=c(1:ncol(HPF)))
+
+
+##meta整合
+
+library(meta)
+colnames(HPF1)
+info<-dplyr::select(HPF1,HR,CIL,CIH,Dataset)
+info$lghr <- log(info$HR)
+lglci <- log(info$CIL)
+lguci <- log(info$CIH)
+info$selghr <- (lguci-lglci)/(2*1.96)
+pfs <- metagen(TE = lghr,seTE = selghr,studlab =Dataset ,data = info,sm = 'HR')
+pfs
+
+settings.meta('JAMA')
+settings.meta('RevMan5')
+settings.meta('meta4')
+settings.meta('reset')
+
+forest(pfs)
+forest(metainf(pfs,pooled = 'random'))
+
+
+HPF1b<-dplyr::select(HPF1,HR,CIL,CIH,Dataset)
+
+HPF1b$"" <- paste(rep(" ", 9), collapse = " ")
+
+HPF1b$HR<-as.numeric(HPF1b$HR)
+HPF1b$CIL<-as.numeric(HPF1b$CIL)
+HPF1b$CIH<-as.numeric(HPF1b$CIH)
+
+HPF1b$"HR (95% CI)" <- ifelse(is.na(HPF1b$HR), "",
+                              sprintf("%.3f (%.3f to %.3f)",HPF1b$HR, HPF1b$CIL, HPF1b$CIH))
+
+help(forest)
+
+library(forestplot)
+
+library(forestploter)
+library(pacman)
+p_unload(meta) ##不然forest函数有冲突
+
+tm <- forest_theme(base_size = 10,
+                   refline_col = "#F08080",
+                   base_family = "")
+HPF1b<-HPF1b[c(1:6,8,9,7),]
+FOS<-forest(HPF1b[,c(4,5,6)],
+            est=HPF1b$HR,
+            lower=HPF1b$CIL,
+            upper=HPF1b$CIH,
+            xlab="Hazard Ratio(95%CI)",
+            ci_column = 2,
+            ref_line = 1,
+            xlim = c(0, 5),
+            ticks_at = c(0, 1, 3, 5),
+            arrow_lab = c("High Better", "Low Better"),theme = tm)
+FOS
+ggsave("gene signature Hpr HR COX OS.pdf",plot=FOS,width=4, height=6)
+dev.off()
+
+
+##诺曼图
+library(survival)
+library(survminer)
+library(ggpubr)
+library(magrittr)
+library(ggplot2)
+library(rms)
+library(Hmisc)
+library(lattice)
+library(Formula)
+library(grid)
+## 构建(1) COX比例风险模型
+mm<-subset(lR1a,lR1a$Dataset=="GSE68465",select=c(1:ncol(lR1a)))
+mm1<-mm[,c("OS.time","OS.status","LAS")]
+write.csv(mm1, file="D:/data/data3/ASPM/Single LUAD/mm1.csv",col.names = T,row.names = F)
+
+mm1<-read.table("D:/data/data3/ASPM/Single LUAD/mm1.csv",sep=",",header=TRUE,stringsAsFactors=FALSE)
+
+dd=datadist(mm1)
+options(datadist="dd")
+options(digits=2)
+a1<-cph(Surv(OS.time,OS.status)~LAS,data=mm1,
+        x=T, y=T, surv=T)
+
+
+
+
+## 构建一年生存概率图，注意数据的time是以”月“为单位fun.at=c(0.05,seq(0.1, 0.6, by=0.1), 0.65)
+surv<-Survival(a1)# 构建生存概率函数
+
+##画诺曼图需要dd
+nom1<-nomogram(a1,lp=FALSE,fun=list(function(x) surv(12, x),
+                                    function(x) surv(12*3, x),
+                                    function(x) surv(12*5, x)),
+
+               funlabel=c("1-year OS probability",
+                          "3-year OS probability",
+                          "5-year OS probability"))
+plot(nom1)
+
+pdf("GSE68465 OS Hprosig nomo.pdf",width=8.5, height=5)
+
+
+p1<-plot(nom1,xfrac=0.3, font.var=4,col.var="red",
+         cex.axis=0.6,cex.var=0.85,col.grid = gray(c(0.8, 0.95)))
+p1
+dev.off()
+
+
+###使用上述cox模型预测test数据集生存概率
+install.packages("pec")
+library(pec) ##验证模型
+library(rms)  ##拟合生存分析模型
+library(survival)  ##生存分析包
+library(glmnet)  ##Lasso回归包
+
+
+testsu<-lR1a
+testsu1<-testsu[,c("OS.time","OS.status","LAS")]
+
+##无需预测数据的生存数据
+##测试时选用testsu<-mm1
+testsu1<-as.data.frame(testsu[,c("LAS")])
+colnames(testsu1)<-c("LAS")
+
+rownames(testsu1)<-testsu$Patients
+
+t <- c(1*12,3*12,5*12)
+survprob <- predictSurvProb(a1,newd=testsu1,times=t) ##预测不需要dd
+head(survprob)
+
+survprob1<-as.data.frame(survprob)
+survprob1$Patients<-rownames(survprob1)
+
+##5年
+LUAD5p<-testsu
+LUAD5p$Typesur[LUAD5p$OS.time > 60]<-"Low risk"
+LUAD5p$Typesur[LUAD5p$OS.time < 60 & LUAD5p$OS.status=="1"]<-"High risk"
+LUAD5p$Typesur[LUAD5p$OS.time < 60 & LUAD5p$OS.status=="0"]<-"Unknow"
+table(LUAD5p$Typesur)
+zhe0<-merge(survprob1,LUAD5p,by=c("Patients"))
+zhe1<-subset(zhe0,zhe0$Typesur!="Unknow",select=c(1:ncol(zhe0)))
+
+zhe2<-split(zhe1,zhe1$Dataset)
+names(zhe2)<-unique(zhe1$Dataset)
+
+###控住输出小数位，采用format函数
+options(digits=4)
+for(i in names(zhe2)){
+  pdf(file=paste0(i,"_five survival.pdf"),width=5, height=5)
+  print(plot(roc(zhe2[[i]]$Typesur,zhe2[[i]]$`60`),print.auc=FALSE, auc.polygon=TRUE, max.auc.polygon=TRUE,
+             auc.polygon.col="#EED5D2", print.thres=TRUE,font=2,
+             main="",cex.main=2,
+             font.lab=2,font.axis=2,cex.lab=1.8,cex.axis=1.4))
+  print(text(0.45,0.1,paste0("AUC:",format(ci(roc(zhe2[[i]]$Typesur,zhe2[[i]]$`60`))[2],digits=3),
+                             "\n 95% CI:",
+                             format(ci(roc(zhe2[[i]]$Typesur,zhe2[[i]]$`60`))[1],digits=3),
+                             "-",format(ci(roc(zhe2[[i]]$Typesur,zhe2[[i]]$`60`))[3],digits=3)),
+             cex=1.6,font=2))
+  dev.off()}
+
+
+zhe3<-list()
+for(i in seq_along(zhe2)){
+  zhe3[[i]] <- ci(roc(zhe2[[i]]$Typesur,zhe2[[i]]$`60`))[2]
+}
+
+zhe4<-as.data.frame(do.call("rbind",zhe3))
+colnames(zhe4)<-"AUC5"
+
+AUC5<-zhe4
+
+
+zhe3a<-list()
+for(i in seq_along(zhe2)){
+  zhe3a[[i]] <- ci(roc(zhe2[[i]]$Typesur,zhe2[[i]]$`60`))[1]
+}
+
+zhe4a<-as.data.frame(do.call("rbind",zhe3a))
+colnames(zhe4a)<-"AUC5l"
+
+AUC5l<-zhe4a
+
+
+zhe3b<-list()
+for(i in seq_along(zhe2)){
+  zhe3b[[i]] <- ci(roc(zhe2[[i]]$Typesur,zhe2[[i]]$`60`))[3]
+}
+
+zhe4b<-as.data.frame(do.call("rbind",zhe3b))
+colnames(zhe4b)<-"AUC5h"
+
+AUC5h<-zhe4b
+
+
+library(forestplot)
+library(checkmate)
+b5<-data.frame(names(zhe2),AUC5,AUC5h,AUC5l)
+write.csv(b5, file="OS AUC 5year.csv",col.names = T,row.names = F)
+b6<-data.frame(mean=b5$AUC5,lower=b5$AUC5l,upper=b5$AUC5h)
+b7<-b5[,1]
+###lineheight=unit(10,"mm")行距先不设置，为了后面图形一致
+pdf("OS AUC 5year.pdf",width=5, height=4)
+b8<-forestplot(b7,b6,graph.pos="right",xlab="AUC(95%CI)",
+               graphwidth=unit(7,"cm"),
+               colgap=unit(3,"mm"),
+               zero = 0.5,
+               col=fpColors(box="#CD3278",lines="grey",zero="#1A1A1A"),boxsize=0.1,
+               txt_gp=fpTxtGp(label=gpar(fontsize=14,fontface="bold"),
+                              xlab=gpar(fontsize=14,fontface="bold"),
+                              ticks=gpar(fontsize=14,fontface="bold")),
+               lwd.zero=1,lwd.xaxis=2,lwd.ci=2,lty.zero="dashed",lty.ci=7)
+b8
+dev.off()
+
+
+
+##3年
+LUAD5p<-testsu
+LUAD5p$Typesur[LUAD5p$OS.time > 36]<-"Low risk"
+LUAD5p$Typesur[LUAD5p$OS.time < 36 & LUAD5p$OS.status=="1"]<-"High risk"
+LUAD5p$Typesur[LUAD5p$OS.time < 36 & LUAD5p$OS.status=="0"]<-"Unknow"
+table(LUAD5p$Typesur)
+zhe0<-merge(survprob1,LUAD5p,by=c("Patients"))
+zhe1<-subset(zhe0,zhe0$Typesur!="Unknow",select=c(1:ncol(zhe0)))
+
+zhe2<-split(zhe1,zhe1$Dataset)
+names(zhe2)<-unique(zhe1$Dataset)
+
+###控住输出小数位，采用format函数
+options(digits=4)
+for(i in names(zhe2)){
+  pdf(file=paste0(i,"_three survival.pdf"),width=5, height=5)
+  print(plot(roc(zhe2[[i]]$Typesur,zhe2[[i]]$`60`),print.auc=FALSE, auc.polygon=TRUE, max.auc.polygon=TRUE,
+             auc.polygon.col="#EED5D2", print.thres=TRUE,font=2,
+             main="",cex.main=2,
+             font.lab=2,font.axis=2,cex.lab=1.8,cex.axis=1.4))
+  print(text(0.45,0.1,paste0("AUC:",format(ci(roc(zhe2[[i]]$Typesur,zhe2[[i]]$`36`))[2],digits=3),
+                             "\n 95% CI:",
+                             format(ci(roc(zhe2[[i]]$Typesur,zhe2[[i]]$`36`))[1],digits=3),
+                             "-",format(ci(roc(zhe2[[i]]$Typesur,zhe2[[i]]$`36`))[3],digits=3)),
+             cex=1.6,font=2))
+  dev.off()}
+
+
+zhe3<-list()
+for(i in seq_along(zhe2)){
+  zhe3[[i]] <- ci(roc(zhe2[[i]]$Typesur,zhe2[[i]]$`36`))[2]
+}
+
+zhe4<-as.data.frame(do.call("rbind",zhe3))
+colnames(zhe4)<-"AUC3"
+
+AUC3<-zhe4
+
+zhe3a<-list()
+for(i in seq_along(zhe2)){
+  zhe3a[[i]] <- ci(roc(zhe2[[i]]$Typesur,zhe2[[i]]$`36`))[1]
+}
+
+zhe4a<-as.data.frame(do.call("rbind",zhe3a))
+colnames(zhe4a)<-"AUC3l"
+
+AUC3l<-zhe4a
+
+
+zhe3b<-list()
+for(i in seq_along(zhe2)){
+  zhe3b[[i]] <- ci(roc(zhe2[[i]]$Typesur,zhe2[[i]]$`36`))[3]
+}
+
+zhe4b<-as.data.frame(do.call("rbind",zhe3b))
+colnames(zhe4b)<-"AUC3h"
+
+AUC3h<-zhe4b
+
+
+library(forestplot)
+library(checkmate)
+b5<-data.frame(names(zhe2),AUC3,AUC3h,AUC3l)
+write.csv(b5, file="OS AUC 3year.csv",col.names = T,row.names = F)
+b6<-data.frame(mean=b5$AUC3,lower=b5$AUC3l,upper=b5$AUC3h)
+b7<-b5[,1]
+###lineheight=unit(10,"mm")行距先不设置，为了后面图形一致
+pdf("OS AUC 3year.pdf",width=5, height=4)
+b8<-forestplot(b7,b6,graph.pos="right",xlab="AUC(95%CI)",
+               graphwidth=unit(7,"cm"),
+               colgap=unit(3,"mm"),
+               zero = 0.5,
+               col=fpColors(box="#CD3278",lines="grey",zero="#1A1A1A"),boxsize=0.1,
+               txt_gp=fpTxtGp(label=gpar(fontsize=14,fontface="bold"),
+                              xlab=gpar(fontsize=14,fontface="bold"),
+                              ticks=gpar(fontsize=14,fontface="bold")),
+               lwd.zero=1,lwd.xaxis=2,lwd.ci=2,lty.zero="dashed",lty.ci=7)
+b8
+dev.off()
+
+##1年
+LUAD5p<-testsu
+LUAD5p$Typesur[LUAD5p$OS.time > 12]<-"Low risk"
+LUAD5p$Typesur[LUAD5p$OS.time < 12 & LUAD5p$OS.status=="1"]<-"High risk"
+LUAD5p$Typesur[LUAD5p$OS.time < 12 & LUAD5p$OS.status=="0"]<-"Unknow"
+table(LUAD5p$Typesur)
+zhe0<-merge(survprob1,LUAD5p,by=c("Patients"))
+zhe1<-subset(zhe0,zhe0$Typesur!="Unknow",select=c(1:ncol(zhe0)))
+
+zhe2<-split(zhe1,zhe1$Dataset)
+names(zhe2)<-unique(zhe1$Dataset)
+
+###控住输出小数位，采用format函数
+options(digits=4)
+for(i in names(zhe2)){
+  pdf(file=paste0(i,"_one survival.pdf"),width=5, height=5)
+  print(plot(roc(zhe2[[i]]$Typesur,zhe2[[i]]$`60`),print.auc=FALSE, auc.polygon=TRUE, max.auc.polygon=TRUE,
+             auc.polygon.col="#EED5D2", print.thres=TRUE,font=2,
+             main="",cex.main=2,
+             font.lab=2,font.axis=2,cex.lab=1.8,cex.axis=1.4))
+  print(text(0.45,0.1,paste0("AUC:",format(ci(roc(zhe2[[i]]$Typesur,zhe2[[i]]$`12`))[2],digits=3),
+                             "\n 95% CI:",
+                             format(ci(roc(zhe2[[i]]$Typesur,zhe2[[i]]$`12`))[1],digits=3),
+                             "-",format(ci(roc(zhe2[[i]]$Typesur,zhe2[[i]]$`12`))[3],digits=3)),
+             cex=1.6,font=2))
+  dev.off()}
+
+
+zhe3<-list()
+for(i in seq_along(zhe2)){
+  zhe3[[i]] <- ci(roc(zhe2[[i]]$Typesur,zhe2[[i]]$`12`))[2]
+}
+
+zhe4<-as.data.frame(do.call("rbind",zhe3))
+colnames(zhe4)<-"AUC1"
+
+AUC1<-zhe4
+
+zhe3a<-list()
+for(i in seq_along(zhe2)){
+  zhe3a[[i]] <- ci(roc(zhe2[[i]]$Typesur,zhe2[[i]]$`12`))[1]
+}
+
+zhe4a<-as.data.frame(do.call("rbind",zhe3a))
+colnames(zhe4a)<-"AUC1l"
+
+AUC1l<-zhe4a
+
+
+zhe3b<-list()
+for(i in seq_along(zhe2)){
+  zhe3b[[i]] <- ci(roc(zhe2[[i]]$Typesur,zhe2[[i]]$`12`))[3]
+}
+
+zhe4b<-as.data.frame(do.call("rbind",zhe3b))
+colnames(zhe4b)<-"AUC1h"
+
+AUC1h<-zhe4b
+
+
+library(forestplot)
+library(checkmate)
+b5<-data.frame(names(zhe2),AUC1,AUC1h,AUC1l)
+write.csv(b5, file="OS AUC 1year.csv",col.names = T,row.names = F)
+b6<-data.frame(mean=b5$AUC1,lower=b5$AUC1l,upper=b5$AUC1h)
+b7<-b5[,1]
+###lineheight=unit(10,"mm")行距先不设置，为了后面图形一致
+pdf("OS AUC 1year.pdf",width=5, height=4)
+b8<-forestplot(b7,b6,graph.pos="right",xlab="AUC(95%CI)",
+               graphwidth=unit(7,"cm"),
+               colgap=unit(3,"mm"),
+               zero = 0.5,
+               col=fpColors(box="#CD3278",lines="grey",zero="#1A1A1A"),boxsize=0.1,
+               txt_gp=fpTxtGp(label=gpar(fontsize=14,fontface="bold"),
+                              xlab=gpar(fontsize=14,fontface="bold"),
+                              ticks=gpar(fontsize=14,fontface="bold")),
+               lwd.zero=1,lwd.xaxis=2,lwd.ci=2,lty.zero="dashed",lty.ci=7)
+b8
+dev.off()
+
+##作图
+AUCz<-cbind(AUC1,AUC3,AUC5)
+colnames(AUCz)<-c("1−year OS",
+                  "3−year OS",
+                  "5−year OS")
+AUCz$Dataset<-names(zhe2)
+
+AUCz2<-melt(AUCz,id=c("Dataset"))
+d1C<-AUCz2
+pd<-position_dodge(0.3)
+d2C<-ggplot(d1C,aes(x=Dataset,y=value,colour=variable,group=variable))+theme_bw()+
+  geom_line(size=0.5,linetype=3)+
+  geom_point(position=pd,size=2)+
+  scale_colour_manual(values=c("red","royalblue","seagreen"))+
+  theme(axis.text.y=element_text(face="bold",colour="black",size=12))+
+  theme(axis.text.x=element_text(face="bold",angle=60,
+                                 hjust=1,colour="black",size=10))+
+  xlab("")+ylab("AUC")+
+  theme(axis.title.x=element_text(face="bold",colour="black",size=10))+
+  theme(axis.title.y=element_text(face="bold",colour="black",size=12))+
+  theme(legend.text=element_text(face="bold",colour="black",size=12))+
+  theme(legend.position="right")+labs(colour="")+
+  guides(colour=guide_legend(reverse=FALSE))+
+  theme(legend.title=element_text(face="bold",colour="black",size=12))+
+  theme(panel.grid =element_blank())+
+  theme(plot.margin=unit(c(1,1,1,1),"cm"))
+d2C
+ggsave("LUAD signature OS AUC.pdf",width=6, height=4)
+
+
+
+
+
+##IA危险分型
+##
+mmA<-subset(lR1a,lR1a$Dataset=="GSE68465" &
+              lR1a$pStage=="IA" & lR1a$Histology=="AD",select=c(1:ncol(lR1a)))
+
+t5<-xu2[,mmA$Patients]
+
+
+t6<-as.matrix(t5)%>%na.omit()
+
+
+getwd()
+title="D:\\data/data3/ASPM/Single LUAD/Concensus"
+results = ConsensusClusterPlus(t6,maxK=10,reps=1000,pItem=0.8,pFeature=1,
+                               title=title,clusterAlg="pam",
+
+                               distance="euclidean",seed=12341234,plot="pdf")
+icl=calcICL(results,plot="pdf")
+dev.off()
+
+#????K=2ʱ??һ???Ծ???
+results[[2]][["consensusMatrix"]][1:5,1:5]
+#hclustѡ??
+results[[2]][["consensusTree"]]
+#????????
+results[[2]][["consensusClass"]][1:20]
+t7<-as.data.frame(results[[2]][["consensusClass"]])
+colnames(t7)<-c("Type")
+t7$Patients<-rownames(t7)
+
+b1<-merge(t7,mmA,by=c("Patients"))
+
+
+##OS
+b2o<-subset(b1,b1$OS.time>1,select=c(1:ncol(b1)))  ##112
+###????????
+
+b3o<-survdiff(Surv(OS.time, OS.status)~Type, data=b2o)## p= 0.7
+b3o
+##无意义
+
+
+##IA按五年生存率进行机器学习的计算
+
+
+LUAD6<-read.table("D:/data/data16/NSCLC matrix z new.csv",
+                  sep=",",header=TRUE,stringsAsFactors=FALSE)
+
+lR1ap1a<-subset(lR1ap,lR1ap$pStage=="IA",select=c(1:ncol(lR1ap)))
+LUAD7a<-LUAD6[,c("GeneID",intersect(lR1ap1a$Patients,colnames(LUAD6)))]
+
+f1<-read.table("D:/data/data16/LUAD IA H L U.csv",sep=",",header=TRUE,stringsAsFactors=FALSE)
+
+
+f4<-subset(f1,f1$Typesur!="Unknow" & f1$Dataset %in% c("GSE13213","GSE30219",
+                                                        "GSE31210","GSE41271",
+                                                        "GSE42127",
+                                                        "GSE50081","GSE68465",
+                                                        "GSE72094","TCGA-LUAD"),select=c(1:ncol(f1)))
+f2<-subset(LUAD7a,LUAD7a$GeneID %in% ssi4$ENTREZID,select=c(1:ncol(LUAD7a)))
+rownames(f2)<-f2$GeneID
+f5<-dplyr::select(f2,one_of(f4$Patients))##386
+
+f6<-as.data.frame(t(f5))
+f6a<-as.data.frame(sapply(f6,as.numeric))
+
+class(f6a$`100`)
+f6a[c(1:3),c(1:3)]
+
+f6a$Patients<-rownames(f6)
+
+f6a1<-merge(f4[,c(2,24)],f6a,by=c("Patients"))
+
+f6a1[c(1:3),c(1:3)]
+
+f7<-f6a1
+table(f7$Typesur)
+f7$Typesur1[f7$Typesur=="Low risk"]<-0
+f7$Typesur1[f7$Typesur=="High risk"]<-1
+table(f7$Typesur,f7$Typesur1)
+
+f7[c(1:3),c(1:3)]
+
+
+library(caret)
+set.seed(73452) #固定folds函数的分组
+folds <- createFolds(y=f7$Typesur1,k=4)
+
+
+##K=1
+ak<-f7[-folds$Fold1,]
+##训练集
+rownames(ak)<-ak$Patients
+trainx<-ak[,-c(1,2,42)]
+trainy<-ak$Typesur
+##验证集
+d3t<-f7[folds$Fold1,]
+testx<-d3t[,-c(1,2,42)]
+testy<-d3t$Typesur
+
+
+##K=2
+ak<-f7[-folds$Fold2,]
+##训练集
+rownames(ak)<-ak$Patients
+trainx<-ak[,-c(1,2,42)]
+trainy<-ak$Typesur
+##验证集
+d3t<-f7[folds$Fold2,]
+testx<-d3t[,-c(1,2,42)]
+testy<-d3t$Typesur
+
+
+##K=3
+ak<-f7[-folds$Fold3,]
+##训练集
+rownames(ak)<-ak$Patients
+trainx<-ak[,-c(1,2,42)]
+trainy<-ak$Typesur
+##验证集
+d3t<-f7[folds$Fold3,]
+testx<-d3t[,-c(1,2,42)]
+testy<-d3t$Typesur
+
+
+##K=4
+ak<-f7[-folds$Fold4,]
+##训练集
+rownames(ak)<-ak$Patients
+trainx<-ak[,-c(1,2,42)]
+trainy<-ak$Typesur
+##验证集
+d3t<-f7[folds$Fold4,]
+testx<-d3t[,-c(1,2,42)]
+testy<-d3t$Typesur
+
+
+
+options(digits=4)
+
+set.seed(20220712)
+Fit1 = train(trainx,trainy,method ="rf")
+Fit2 = train(trainx,trainy,method ="gbm")
+Fit3 = train(trainx,trainy,method ="nnet")
+Fit4 = train(trainx,trainy,method ="xgbTree")
+Fit5 = train(trainx,trainy,method ="knn")
+Fit6 = train(trainx,trainy,method ="pls")
+Fit7 = train(trainx,trainy,method ="naive_bayes")
+Fit8 = train(trainx,trainy,method ="treebag")
+
+models = list(Fit1,Fit2,Fit3,Fit4,Fit5,Fit6,Fit7,Fit8)
+
+
+##测试集
+probValues = extractProb(models,testX = testx, testY = testy)
+testProbs = subset(probValues, dataType == "Test")
+
+prob1 = subset(testProbs, model == "rf")
+prob2 = subset(testProbs, model == "gbm")
+prob3 = subset(testProbs, model == "nnet")
+prob4 = subset(testProbs, model == "xgbTree")
+prob5 = subset(testProbs, model == "knn")
+prob6 = subset(testProbs, model == "pls")
+prob7 = subset(testProbs, model == "naive_bayes")
+prob8 = subset(testProbs, model == "treebag")
+
+
+library(ROCR)
+prob1$lable=ifelse(prob1$obs=="High risk",yes=1,0)
+prob2$lable=ifelse(prob2$obs=="High risk",yes=1,0)
+prob3$lable=ifelse(prob3$obs=="High risk",yes=1,0)
+prob4$lable=ifelse(prob4$obs=="High risk",yes=1,0)
+prob5$lable=ifelse(prob5$obs=="High risk",yes=1,0)
+prob6$lable=ifelse(prob6$obs=="High risk",yes=1,0)
+prob7$lable=ifelse(prob7$obs=="High risk",yes=1,0)
+prob8$lable=ifelse(prob8$obs=="High risk",yes=1,0)
+
+
+lR1<-roc(prob1$lable,prob1$High.risk)
+auc(lR1)###
+pROC::ci(lR1)#
+pdf("IA k1 test roc rf.pdf",width=5, height=5)
+plot(lR1,print.auc=FALSE, auc.polygon=TRUE, max.auc.polygon=TRUE,
+     auc.polygon.col="#EED5D2", print.thres=TRUE,font=2,
+     main="",cex.main=2,
+     font.lab=2,font.axis=2,cex.lab=1.8,cex.axis=1.4)
+text(0.45,0.1,"AUC:0.707 \n 95% CI: 0.597-0.818",
+     cex=1.6,font=2)
+dev.off()
+
+
+
+lR2<-roc(prob2$lable,prob2$High.risk)
+auc(lR2)###
+pROC::ci(lR2)#
+pdf("IA k1 test roc gbm.pdf",width=5, height=5)
+plot(lR2,print.auc=FALSE, auc.polygon=TRUE, max.auc.polygon=TRUE,
+     auc.polygon.col="#EED5D2", print.thres=TRUE,font=2,
+     main="",cex.main=2,
+     font.lab=2,font.axis=2,cex.lab=1.8,cex.axis=1.4)
+text(0.45,0.1,"AUC:0.684 \n 95% CI: 0.569-0.799",
+     cex=1.6,font=2)
+dev.off()
+
+
+
+
+lR3<-roc(prob3$lable,prob3$High.risk)
+auc(lR3)###
+pROC::ci(lR3)#
+pdf("IA k1 test roc nnet.pdf",width=5, height=5)
+plot(lR3,print.auc=FALSE, auc.polygon=TRUE, max.auc.polygon=TRUE,
+     auc.polygon.col="#EED5D2", print.thres=TRUE,font=2,
+     main="",cex.main=2,
+     font.lab=2,font.axis=2,cex.lab=1.8,cex.axis=1.4)
+text(0.45,0.1,"AUC:0.525 \n 95% CI: 0.405-0.645",
+     cex=1.6,font=2)
+dev.off()
+
+
+
+
+
+lR4<-roc(prob4$lable,prob4$High.risk)
+auc(lR4)###
+pROC::ci(lR4)
+pdf("IA k1 test roc xgbtree.pdf",width=5, height=5)
+plot(lR4,print.auc=FALSE, auc.polygon=TRUE, max.auc.polygon=TRUE,
+     auc.polygon.col="#EED5D2", print.thres=TRUE,font=2,
+     main="",cex.main=2,
+     font.lab=2,font.axis=2,cex.lab=1.8,cex.axis=1.4)
+text(0.45,0.1,"AUC:0.657 \n 95% CI: 0.539-0.776",
+     cex=1.6,font=2)
+dev.off()
+
+
+lR5<-roc(prob5$lable,prob5$High.risk)
+auc(lR5)###
+pROC::ci(lR5)##
+pdf("IA k1 test roc knn.pdf",width=5, height=5)
+plot(lR5,print.auc=FALSE, auc.polygon=TRUE, max.auc.polygon=TRUE,
+     auc.polygon.col="#EED5D2", print.thres=TRUE,font=2,
+     main="",cex.main=2,
+     font.lab=2,font.axis=2,cex.lab=1.8,cex.axis=1.4)
+text(0.45,0.1,"AUC:0.526 \n 95% CI: 0.402-0.650",
+     cex=1.6,font=2)
+dev.off()
+
+
+lR6<-roc(prob6$lable,prob6$High.risk)
+auc(lR6)###
+pROC::ci(lR6)#
+pdf("IA k1 test roc pls.pdf",width=5, height=5)
+plot(lR6,print.auc=FALSE, auc.polygon=TRUE, max.auc.polygon=TRUE,
+     auc.polygon.col="#EED5D2", print.thres=TRUE,font=2,
+     main="",cex.main=2,
+     font.lab=2,font.axis=2,cex.lab=1.8,cex.axis=1.4)
+text(0.45,0.1,"AUC:0.678 \n 95% CI: 0.567-0.790",
+     cex=1.6,font=2)
+dev.off()
+
+
+lR7<-roc(prob7$lable,prob7$High.risk)
+auc(lR7)###
+pROC::ci(lR7)##
+pdf("IA k1 test roc bayes.pdf",width=5, height=5)
+plot(lR7,print.auc=FALSE, auc.polygon=TRUE, max.auc.polygon=TRUE,
+     auc.polygon.col="#EED5D2", print.thres=TRUE,font=2,
+     main="",cex.main=2,
+     font.lab=2,font.axis=2,cex.lab=1.8,cex.axis=1.4)
+text(0.45,0.1,"AUC:0.691 \n 95% CI: 0.579-0.802",
+     cex=1.6,font=2)
+dev.off()
+
+lR8<-roc(prob8$lable,prob8$High.risk)
+auc(lR8)###
+pROC::ci(lR8)##
+pdf("IA k1 test roc treebag.pdf",width=5, height=5)
+plot(lR8,print.auc=FALSE, auc.polygon=TRUE, max.auc.polygon=TRUE,
+     auc.polygon.col="#EED5D2", print.thres=TRUE,font=2,
+     main="",cex.main=2,
+     font.lab=2,font.axis=2,cex.lab=1.8,cex.axis=1.4)
+text(0.45,0.1,"AUC:0.664 \n 95% CI: 0.547-0.782",
+     cex=1.6,font=2)
+dev.off()
+
+
+library(forestplot)
+
+library(forestploter)
+library(pacman)
+p_unload(meta) ##不然forest函数有冲突
+
+tm <- forest_theme(base_size = 10,
+                   refline_col = "#F08080",
+                   base_family = "")
+
+##k1
+##test
+type<-c("rf","gbm","nnet","XGBoost","knn","pls","naive_bayes","treebag")
+AUC<-c(0.707,0.684,0.525,0.657,0.526,0.678,0.691,0.664)
+low<-c(0.597,0.569,0.405,0.539,0.402,0.567,0.579,0.547)
+up<-c(0.818,0.799,0.645,0.776,0.650,0.790,0.802,0.782)
+auc1<-data.frame(type,AUC,low,up)
+
+library(forestplot)
+library(checkmate)
+
+write.csv(auc1, file="IA sur AUC k1.csv",col.names = T,row.names = F)
+b6a<-data.frame(mean=auc1$AUC,lower=auc1$low,upper=auc1$up)
+b7a<-auc1[,1]
+###lineheight=unit(10,"mm")行距先不设置，为了后面图形一致
+pdf("k1 IA test.pdf",width=5, height=4)
+b8a<-forestplot(b7a,b6a,graph.pos="right",xlab="AUC(95%CI)",
+               graphwidth=unit(6,"cm"),
+               colgap=unit(3,"mm"),
+               zero = 0.5,
+               col=fpColors(box="royalblue",lines="grey",zero="#1A1A1A"),boxsize=0.1,
+               txt_gp=fpTxtGp(label=gpar(fontsize=14,fontface="bold"),
+                              xlab=gpar(fontsize=14,fontface="bold"),
+                              ticks=gpar(fontsize=14,fontface="bold")),
+               lwd.zero=1,lwd.xaxis=1,lwd.ci=1,lty.zero="dashed",lty.ci=7)
+b8a
+dev.off()
+
+
+
+
+
+
+
+##训练集
+probValues = extractProb(models,testX = trainx, testY = trainy)
+testProbs = subset(probValues, dataType == "Test")
+
+prob1 = subset(testProbs, model == "rf")
+prob2 = subset(testProbs, model == "gbm")
+prob3 = subset(testProbs, model == "nnet")
+prob4 = subset(testProbs, model == "xgbTree")
+prob5 = subset(testProbs, model == "knn")
+prob6 = subset(testProbs, model == "pls")
+prob7 = subset(testProbs, model == "naive_bayes")
+prob8 = subset(testProbs, model == "treebag")
+
+
+library(ROCR)
+prob1$lable=ifelse(prob1$obs=="High risk",yes=1,0)
+prob2$lable=ifelse(prob2$obs=="High risk",yes=1,0)
+prob3$lable=ifelse(prob3$obs=="High risk",yes=1,0)
+prob4$lable=ifelse(prob4$obs=="High risk",yes=1,0)
+prob5$lable=ifelse(prob5$obs=="High risk",yes=1,0)
+prob6$lable=ifelse(prob6$obs=="High risk",yes=1,0)
+prob7$lable=ifelse(prob7$obs=="High risk",yes=1,0)
+prob8$lable=ifelse(prob8$obs=="High risk",yes=1,0)
+
+
+lR1<-roc(prob1$lable,prob1$High.risk)
+auc(lR1)###
+pROC::ci(lR1)#
+pdf("IA k1 train roc rf.pdf",width=5, height=5)
+plot(lR1,print.auc=FALSE, auc.polygon=TRUE, max.auc.polygon=TRUE,
+     auc.polygon.col="#BFEFFF", print.thres=TRUE,font=2,
+     main="",cex.main=2,
+     font.lab=2,font.axis=2,cex.lab=1.8,cex.axis=1.4)
+text(0.45,0.1,"AUC:1 \n 95% CI: 1-1",
+     cex=1.6,font=2)
+dev.off()
+
+
+
+
+lR2<-roc(prob2$lable,prob2$High.risk)
+auc(lR2)###
+pROC::ci(lR2)#
+pdf("IA k1 train roc gbm.pdf",width=5, height=5)
+plot(lR2,print.auc=FALSE, auc.polygon=TRUE, max.auc.polygon=TRUE,
+     auc.polygon.col="#BFEFFF", print.thres=TRUE,font=2,
+     main="",cex.main=2,
+     font.lab=2,font.axis=2,cex.lab=1.8,cex.axis=1.4)
+text(0.45,0.1,"AUC:0.831 \n 95% CI: 0.783-0.878",
+     cex=1.6,font=2)
+dev.off()
+
+
+
+lR3<-roc(prob3$lable,prob3$High.risk)
+auc(lR3)###
+pROC::ci(lR3)#
+pdf("IA k1 train roc nnet.pdf",width=5, height=5)
+plot(lR3,print.auc=FALSE, auc.polygon=TRUE, max.auc.polygon=TRUE,
+     auc.polygon.col="#BFEFFF", print.thres=TRUE,font=2,
+     main="",cex.main=2,
+     font.lab=2,font.axis=2,cex.lab=1.8,cex.axis=1.4)
+text(0.45,0.1,"AUC:0.787 \n 95% CI: 0.731-0.843",
+     cex=1.6,font=2)
+dev.off()
+
+
+lR4<-roc(prob4$lable,prob4$High.risk)
+auc(lR4)###
+pROC::ci(lR4)
+pdf("IA k1 train roc xgbtree.pdf",width=5, height=5)
+plot(lR4,print.auc=FALSE, auc.polygon=TRUE, max.auc.polygon=TRUE,
+     auc.polygon.col="#BFEFFF", print.thres=TRUE,font=2,
+     main="",cex.main=2,
+     font.lab=2,font.axis=2,cex.lab=1.8,cex.axis=1.4)
+text(0.45,0.1,"AUC:0.921 \n 95% CI: 0.892-0.951",
+     cex=1.6,font=2)
+dev.off()
+
+
+lR5<-roc(prob5$lable,prob5$High.risk)
+auc(lR5)###
+pROC::ci(lR5)##
+pdf("IA k1 train roc knn.pdf",width=5, height=5)
+plot(lR5,print.auc=FALSE, auc.polygon=TRUE, max.auc.polygon=TRUE,
+     auc.polygon.col="#BFEFFF", print.thres=TRUE,font=2,
+     main="",cex.main=2,
+     font.lab=2,font.axis=2,cex.lab=1.8,cex.axis=1.4)
+text(0.45,0.1,"AUC:0.777 \n 95% CI: 0.725-0.829",
+     cex=1.6,font=2)
+dev.off()
+
+
+lR6<-roc(prob6$lable,prob6$High.risk)
+auc(lR6)###
+pROC::ci(lR6)#
+pdf("IA k1 train roc pls.pdf",width=5, height=5)
+plot(lR6,print.auc=FALSE, auc.polygon=TRUE, max.auc.polygon=TRUE,
+     auc.polygon.col="#BFEFFF", print.thres=TRUE,font=2,
+     main="",cex.main=2,
+     font.lab=2,font.axis=2,cex.lab=1.8,cex.axis=1.4)
+text(0.45,0.1,"AUC:0.684 \n 95% CI: 0.621-0.748",
+     cex=1.6,font=2)
+dev.off()
+
+
+lR7<-roc(prob7$lable,prob7$High.risk)
+auc(lR7)###
+pROC::ci(lR7)##
+pdf("IA k1 train roc bayes.pdf",width=5, height=5)
+plot(lR7,print.auc=FALSE, auc.polygon=TRUE, max.auc.polygon=TRUE,
+     auc.polygon.col="#BFEFFF", print.thres=TRUE,font=2,
+     main="",cex.main=2,
+     font.lab=2,font.axis=2,cex.lab=1.8,cex.axis=1.4)
+text(0.45,0.1,"AUC:0.733 \n 95% CI: 0.674-0.792",
+     cex=1.6,font=2)
+dev.off()
+
+lR8<-roc(prob8$lable,prob8$High.risk)
+auc(lR8)###
+pROC::ci(lR8)##
+pdf("IA k1 train roc treebag.pdf",width=5, height=5)
+plot(lR8,print.auc=FALSE, auc.polygon=TRUE, max.auc.polygon=TRUE,
+     auc.polygon.col="#BFEFFF", print.thres=TRUE,font=2,
+     main="",cex.main=2,
+     font.lab=2,font.axis=2,cex.lab=1.8,cex.axis=1.4)
+text(0.45,0.1,"AUC:1 \n 95% CI: 1-1",
+     cex=1.6,font=2)
+dev.off()
+
+
+##k1
+##train
+type<-c("rf","gbm","nnet","XGBoost","knn","pls","naive_bayes","treebag")
+AUC1<-c(1,0.831,0.787,0.921,0.777,0.684,0.733,1)
+low1<-c(0.99,0.783,0.731,0.892,0.725,0.621,0.674,0.99)
+up1<-c(1.01,0.878,0.843,0.951,0.829,0.748,0.792,1.01)
+auc1a<-data.frame(type,AUC1,low1,up1)
+
+library(forestplot)
+library(checkmate)
+
+write.csv(auc1a, file="IA sur AUC k1 train.csv",col.names = T,row.names = F)
+b6a1<-data.frame(mean=auc1a$AUC1,lower=auc1a$low1,upper=auc1a$up1)
+b7a1<-auc1a[,1]
+###lineheight=unit(10,"mm")行距先不设置，为了后面图形一致
+pdf("k1 IA train.pdf",width=5, height=4)
+b8a1<-forestplot(b7a1,b6a1,graph.pos="right",xlab="AUC(95%CI)",
+                graphwidth=unit(6,"cm"),
+                colgap=unit(3,"mm"),
+                zero = 0.5,
+                col=fpColors(box="sienna",lines="grey",zero="#1A1A1A"),boxsize=0.1,
+                txt_gp=fpTxtGp(label=gpar(fontsize=14,fontface="bold"),
+                               xlab=gpar(fontsize=14,fontface="bold"),
+                               ticks=gpar(fontsize=14,fontface="bold")),
+                lwd.zero=1,lwd.xaxis=1,lwd.ci=1,lty.zero="dashed",lty.ci=7)
+b8a1
+dev.off()
+
+###综合考虑选择随机森林
+
+##使用全部数据建立随机森林模型
+library(randomForest)
+##
+ak<-f7[,-42]
+write.csv(ak, file="D:/data/data3/ASPM/Single LUAD/LUAD IA survival c.csv",row.names=F)
+
+ji1<-as.data.frame(t(ak[,-1]))
+ji1$Type<-rownames(ji1)
+write.csv(ji1, file="D:/data/data3/ASPM/Single LUAD/LUAD IA survival c1.csv",row.names=F)
+
+##训练集
+
+set.seed(20220712)
+
+ak$Typesur<-as.factor(ak$Typesur)
+class(ak$Typesur)
+
+akm<-ak[,-c(1,2)]
+akm1<-bitr(colnames(akm), fromType = "ENTREZID",
+            toType = c("ENTREZID", "SYMBOL"),
+            OrgDb = org.Hs.eg.db)
+
+akm2<-ak[,c("Typesur",akm1$ENTREZID)]
+colnames(akm2)<-c("Typesur",akm1$SYMBOL)
+
+otu_train.forest <- randomForest(Typesur ~ ., data =akm2, importance = TRUE)
+otu_train.forest
+plot(otu_train.forest)
+train_predict <- predict(otu_train.forest, akm2)
+compare_train <- table(train_predict, akm2$Typesur)
+compare_train
+sum(diag(compare_train)/sum(compare_train))
+
+importance_otu <- otu_train.forest$importance
+head(importance_otu)
+##此处“Mean Decrease Accuracy”和“Mean Decrease Gini”为随机森林模型中的两个重要指标。其中，“mean decrease accuracy”表示随机森林预测准确性的降低程度，该值越大表示该变量的重要性越大；“mean decrease gini”计算每个变量对分类树每个节点上观测值的异质性的影响，从而比较变量的重要性。该值越大表示该变量的重要性越大
+
+
+
+importance_otu <- importance_otu[order(importance_otu$MeanDecreaseAccuracy, decreasing = TRUE), ]
+head(importance_otu)
+
+write.table(importance_otu, 'IA importance_otu.txt', sep = '\t', col.names = NA, quote = FALSE)
+
+pdf("IA varImpPlot rf.pdf",width=6, height=6)
+varImpPlot(otu_train.forest, n.var = min(20, nrow(otu_train.forest$importance)),
+           main = 'Top 20 - variable importance',
+           font=2,
+           cex.main=2,font.main=2,
+           font.lab=2,font.axis=2,cex.lab=1,cex.axis=1)
+
+dev.off()
+
+getwd()
+###开发R包
+library(devtools)
+setwd("D:/data/data3/ASPM/Single LUAD/packages")
+
+##在Rstudio里创建新软件包HpSur
+
+coef<-read.table("D:/data/data3/ASPM/Single LUAD/core1X.csv",
+                  sep=",",header=TRUE,stringsAsFactors=FALSE)
+mm1<-read.table("D:/data/data3/ASPM/Single LUAD/mm1.csv",sep=",",header=TRUE,stringsAsFactors=FALSE)
+
+
+##测试
+
+x<-LUAD5[[1]][,-1]
+
+HpSur1<-function(x){
+  x<-x[as.character(coef$Gene),]
+  x<-as.data.frame(apply(x,2,as.numeric))
+  x<-as.data.frame(sapply(x,function(y)sum(y*(coef$coef))))
+  x$Patients<-rownames(x)
+  colnames(x)<-c("LAS","Patients")
+
+  dd=rms::datadist(mm1)
+  options(rms::datadist="dd")
+  options(digits=2)
+  a1<-rms::cph(survival::Surv(OS.time,OS.status)~LAS,data=mm1,
+               x=T, y=T, surv=T)
+  t <- c(1*12,3*12,5*12)
+  newd<-as.data.frame(x[,-2])
+  colnames(newd)<-"LAS"
+  rownames(newd)<-x$Patients
+  survprob <- pec::predictSurvProb(a1,newd=newd,times=t)
+  survprob1<-as.data.frame(survprob)
+  colnames(survprob1)<-c("1-Year OS","3-Year OS","5-Year OS")
+  survprob1
+}
+
+head(HpSur1(k))
+##正确输出
+
+
+###由于HpSur2预测IA高低危分型始终是IA-high-risk，所以暂时不上传HpSur2函数
+ss1a<-read.table("D:/data/data3/ASPM/Single LUAD/LUAD IA survival c1.csv",sep=",",header=TRUE,stringsAsFactors=FALSE)
+rownames(ss1a)<-ss1a$Type
+ss1<-as.data.frame(t(ss1a))
+
+x<-LUAD5[[10]][,-1]
+
+
+HpSur2<-function(x){
+  set.seed(125609)
+  x<-x[colnames(ss1[,-1]),]
+  Fit1 = caret::train(ss1[,-1],ss1$Type,method ="rf")
+  predictions1 <- predict(Fit1, newdata = t(x),type="prob")
+  predictions_df <- as.data.frame(predictions1)
+  result_df1 <- data.frame(Predicted = ifelse(predictions_df$`High risk` > 0.5, "high.risk", "low.risk"),names=rownames(predictions_df))
+  colnames(result_df1)<-c("Type","Patients")
+  result_df1<-result_df1[,c(2,1)]
+  result_df1
+
+}
+
+
+head(HpSur2(x))
+
+##正确输出
+
+
+library(devtools)
+setwd("D:/data/data3/ASPM/Single LUAD/packages/HSurAD")
+
+##在Rstudio里创建新软件包HSurAD
+
+##读入两个内置数据集
+coef<-read.table("D:/data/data3/ASPM/Single LUAD/core1X.csv",sep=",",header=TRUE,stringsAsFactors=FALSE)
+mm1<-read.table("D:/data/data3/ASPM/Single LUAD/mm1.csv",sep=",",header=TRUE,stringsAsFactors=FALSE)
+
+
+##或者不设置，自动界面就是这个目录
+##将内置数据写入HSurAD中的data文件夹，成为.rda
+usethis::use_data(coef)
+usethis::use_data(mm1)
+
+##调用其他R包
+usethis::use_package("rms")
+usethis::use_package("pec")
+usethis::use_package("survival")
+
+
+devtools::install_github("XiongYL0101/HSurAD")
+
+library(HpASur)
+library(CER101)
+library(CER106)
+
+
+??HpASur
+?HpSur1
+?HpSur2
+
+help(package="CER106")
+help(HpASur)
+
+##测试
+##输入肺腺癌数据集
+setwd("D:/data/data16/singlegene")
+LUAD1<-list.files(pattern="\\RNA matrix.csv")
+LUAD2<-as.data.frame(LUAD1)
+LUAD3<-tidyr::separate(LUAD2,LUAD1,into=c("Dataset")," ")
+for(i in seq_along(LUAD3$Dataset))
+  assign(LUAD3$Dataset[i], read.table(LUAD1[i], sep = ",", header = TRUE))
+
+LUAD4<-list(GSE13213,GSE26939,GSE30219,GSE31210,GSE41271,GSE42127,
+            GSE50081,GSE63459,GSE68465,GSE68571,GSE72094,TCGALUAD)
+for(i in seq_along(LUAD4)){rownames(LUAD4[[i]])<-(LUAD4[[i]])[,1]}
+
+##对每一个数据集进行Z转化
+LUAD5<-lapply(LUAD4,function(x)as.data.frame(t(scale(t(x[,-1])))))
+
+for(i in seq_along(LUAD5)){ LUAD5[[i]]$GeneID <- rownames(LUAD5[[i]])}
+for(i in seq_along(LUAD5)){ LUAD5[[i]] <- (LUAD5[[i]])[,c("GeneID",colnames(LUAD5[[i]])[1:(length(colnames(LUAD5[[i]]))-1)])]}
+
+##所有
+x<-LUAD5[[3]][,-1]
+
+##IA
+f1<-read.table("D:/data/data16/LUAD IA H L U.csv",sep=",",header=TRUE,stringsAsFactors=FALSE)
+
+
+
+xK<-LUAD5[[10]][,intersect(f1$Patients,colnames(LUAD5[[10]]))]
+
+akpp<-ak
+rownames(akpp)<-ak$Patients
+xK1<-as.data.frame(t(akpp[,-c(1:2)]))
+rownames(xK1)
+
+library(HpASur)
+library(CER106)
+HpSur1(x)
+HpSur2(xK1)
